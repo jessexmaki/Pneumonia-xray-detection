@@ -7,10 +7,10 @@ import seaborn as sns
 import os
 
 # Set the paths for training and validation data
-train_normal_dir = '/Users/jessemaki/Downloads/xray_disease_detection/train/NORMAL'
-train_pneumonia_dir = '/Users/jessemaki/Downloads/xray_disease_detection/train/PNEUMONIA'
-valid_normal_dir = '/Users/jessemaki/Downloads/xray_disease_detection/test/NORMAL'
-valid_pneumonia_dir = '/Users/jessemaki/Downloads/xray_disease_detection/test/PNEUMONIA'
+train_normal_dir = 'train/NORMAL'
+train_pneumonia_dir = 'train/PNEUMONIA'
+valid_normal_dir = 'test/NORMAL'
+valid_pneumonia_dir = 'test/PNEUMONIA'
 
 # Function to count images of both .jpg and .jpeg formats
 def count_images(paths, extensions=['*.jpg', '*.jpeg']):
