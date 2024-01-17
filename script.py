@@ -1,120 +1,107 @@
-import numpy as np
 import tensorflow as tf
-import pathlib
-from sklearn.metrics import confusion_matrix
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.metrics import classification_report, confusion_matrix
+from tensorflow.keras import layers
+from tensorflow.keras.optimizers import Adam
 import matplotlib.pyplot as plt
 import seaborn as sns
-import os
+import numpy as np
 
-# Set the paths for training and validation data
-train_normal_dir = 'train/NORMAL'
-train_pneumonia_dir = 'train/PNEUMONIA'
-valid_normal_dir = 'test/NORMAL'
-valid_pneumonia_dir = 'test/PNEUMONIA'
+# Construct an ImageDataGenerator object
+DIRECTORY = "Covid19-dataset/train"
+BATCH_SIZE = 32
 
-# Function to count images of both .jpg and .jpeg formats
-def count_images(paths, extensions=['*.jpg', '*.jpeg']):
-    total = 0
-    for path in paths:
-        path = pathlib.Path(path)
-        total += sum([len(list(path.glob(ext))) for ext in extensions])
-    return total
+training_data_generator = ImageDataGenerator(rescale=1.0/255,
+                                             zoom_range=0.1, 
+                                             rotation_range=25, 
+                                             width_shift_range=0.05, 
+                                             height_shift_range=0.05)
+
+validation_data_generator = ImageDataGenerator()
+
+training_iterator = training_data_generator.flow_from_directory(DIRECTORY, class_mode='categorical', color_mode='grayscale', batch_size=BATCH_SIZE)
+validation_iterator = validation_data_generator.flow_from_directory(DIRECTORY, class_mode='categorical', color_mode='grayscale', batch_size=BATCH_SIZE)
+
+# Fixed hyperparameters
+num_filters = 32  
+kernel_size = 3   
+dropout_rate = 0.3 
+learning_rate = 0.001  
+
+# Modify design_model function
+def design_model(training_data):
+    model = Sequential()
+    model.add(tf.keras.Input(shape=(256, 256, 1)))
+    model.add(layers.Conv2D(num_filters, (kernel_size, kernel_size), strides=3, activation="relu")) 
+    model.add(layers.MaxPooling2D(pool_size=(2, 2), strides=(2,2)))
+    model.add(layers.Dropout(dropout_rate))
+    model.add(layers.Conv2D(num_filters, (kernel_size, kernel_size), strides=1, activation="relu")) 
+    model.add(layers.MaxPooling2D(pool_size=(2, 2), strides=(2,2)))
+    model.add(layers.Dropout(dropout_rate))
+
+    model.add(layers.Flatten())
+    model.add(layers.Dense(3, activation="softmax"))
+    
+    model.compile(optimizer=Adam(learning_rate=learning_rate), 
+                  loss='categorical_crossentropy', 
+                  metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
+
+    return model
+
+# Build and train the model with the fixed hyperparameters
+model = design_model(training_iterator)
+
+print("\nTraining model with fixed hyperparameters...")
+history = model.fit(training_iterator, 
+                    steps_per_epoch=training_iterator.samples/BATCH_SIZE, 
+                    epochs=30,  
+                    validation_data=validation_iterator, 
+                    validation_steps=validation_iterator.samples/BATCH_SIZE)
 
 
-# Print number of training and validation images
-train_image_count = count_images([train_normal_dir, train_pneumonia_dir])
-valid_image_count = count_images([valid_normal_dir, valid_pneumonia_dir])
-print('Training images:', train_image_count, 'Validation images:', valid_image_count)
+# Plotting accuracy and AUC
+fig = plt.figure()
+ax1 = fig.add_subplot(2, 1, 1)
+ax1.plot(history.history['accuracy'])
+ax1.plot(history.history['val_accuracy'])
+ax1.set_title('Model Accuracy')
+ax1.set_xlabel('Epoch')
+ax1.set_ylabel('Accuracy')
+ax1.legend(['Train', 'Validation'], loc='upper left')
 
-# Ensure there are images before proceeding
-if train_image_count == 0 or valid_image_count == 0:
-    raise ValueError("No training/validation images found. Check your paths and file extensions.")
+# Check the keys in history.history to make sure of the correct AUC key names
+print(history.history.keys())
 
-# Function to process the images and extract labels
-def process_image(file_path):
-    # Extract label from file path and assign numerical value
-    label = tf.strings.split(file_path, os.sep)[-2]
-    label = tf.where(label == 'NORMAL', 0, 1)
-    # Load the image
-    img = tf.io.read_file(file_path)
-    img = tf.image.decode_jpeg(img, channels=3)
-    img = tf.image.resize(img, [224, 224])  # Resize to 224x224
-    return img, label
+# Replace 'auc' and 'val_auc' with the correct keys if they are different
+ax2 = fig.add_subplot(2, 1, 2)
+ax2.plot(history.history['auc'])  
+ax2.plot(history.history['val_auc'])  
+ax2.set_title('Model AUC')
+ax2.set_xlabel('Epoch')
+ax2.set_ylabel('AUC')
+ax2.legend(['Train', 'Validation'], loc='upper left')
 
-# Preparing the training dataset
-train_data = tf.data.Dataset.list_files(str(pathlib.Path(train_normal_dir) / '*'))
-train_data = train_data.concatenate(tf.data.Dataset.list_files(str(pathlib.Path(train_pneumonia_dir) / '*')))
-train_data = train_data.map(process_image).batch(32).prefetch(tf.data.AUTOTUNE)
+plt.show()
 
-# Preparing the validation dataset
-valid_data = tf.data.Dataset.list_files(str(pathlib.Path(valid_normal_dir) / '*'))
-valid_data = valid_data.concatenate(tf.data.Dataset.list_files(str(pathlib.Path(valid_pneumonia_dir) / '*')))
-valid_data = valid_data.map(process_image).batch(32).prefetch(tf.data.AUTOTUNE)
+# Evaluate model on the validation set
+test_steps_per_epoch = np.math.ceil(validation_iterator.samples / validation_iterator.batch_size)
+predictions = model.predict(validation_iterator, steps=test_steps_per_epoch)
+predicted_classes = np.argmax(predictions, axis=1)
+true_classes = validation_iterator.classes
+class_labels = list(validation_iterator.class_indices.keys())
 
-print(train_data, valid_data)
+report = classification_report(true_classes, predicted_classes, target_names=class_labels)
+print(report)
 
-# Download pre-trained convolution network with the correct input shape
-base_model = tf.keras.applications.MobileNetV2(input_shape=(224,224,3),  # Correct input shape
-                                               include_top=False,
-                                               weights='imagenet')
-base_model.trainable = False  # Freeze the base model
+# Calculate confusion matrix
+cm = confusion_matrix(true_classes, predicted_classes)
+print(cm)
 
-# Build complete model
-model = tf.keras.Sequential([
-    tf.keras.layers.experimental.preprocessing.Rescaling(1.0/255, input_shape=(224,224,3)),  # Add input_shape here
-    tf.keras.layers.experimental.preprocessing.RandomFlip('horizontal'),
-    tf.keras.layers.experimental.preprocessing.RandomRotation(0.2),
-    base_model,
-    tf.keras.layers.MaxPool2D(),
-    tf.keras.layers.Flatten(),
-    tf.keras.layers.Dense(units=2, activation='softmax')  # Assuming 2 classes: NORMAL and PNEUMONIA
-])
-
-model.summary()
-
-# Compile model
-model.compile(optimizer=tf.keras.optimizers.Adam(),
-              loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-              metrics=['accuracy'])
-
-# Fit model only if there are training images and validation images
-if train_image_count > 0 and valid_image_count > 0:
-    history = model.fit(train_data, 
-                        epochs=20, 
-                        validation_data=valid_data)  # Include the validation data here
-
-    # Plotting training and validation accuracy and loss
-    plt.figure(figsize=(12, 6))
-
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Accuracy over Epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
-
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Loss over Epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    plt.show()
-
-    # Predict classes for the validation dataset
-    valid_images, valid_labels = next(iter(valid_data))
-    predictions = model.predict(valid_images)
-    predicted_labels = np.argmax(predictions, axis=1)
-
-    # Compute and plot confusion matrix
-    cm = confusion_matrix(valid_labels.numpy(), predicted_labels)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='g', cmap='Blues', xticklabels=['Normal', 'Pneumonia'], yticklabels=['Normal', 'Pneumonia'])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.show()
-else:
-    print("No sufficient images to train and validate.")
+# Plotting the confusion matrix
+plt.figure(figsize=(10, 8))
+sns.heatmap(cm, annot=True, fmt="d", cmap='Blues', xticklabels=class_labels, yticklabels=class_labels)
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+plt.show()
